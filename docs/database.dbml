@@ -1,0 +1,155 @@
+// Desain Database — Marketplace H2H PPOB (Draft v0.1)
+// Tempel isi file ini ke https://dbdiagram.io/d untuk melihat diagramnya.
+// Semua nominal uang dalam rupiah (bigint, tanpa desimal).
+
+Project jempol {
+  database_type: 'PostgreSQL'
+  Note: 'Marketplace H2H PPOB. Saldo hanya berubah lewat ledger_entries.'
+}
+
+Enum deposit_status {
+  pending
+  approved
+  rejected
+}
+
+Enum trx_status {
+  pending
+  success
+  failed
+}
+
+Enum ledger_type {
+  deposit
+  purchase
+  refund
+  sale
+}
+
+Table users {
+  id uuid [pk, default: `gen_random_uuid()`]
+  name text [not null]
+  email text [not null, unique]
+  password_hash text [not null, note: 'scrypt']
+  is_admin boolean [not null, default: false]
+  balance bigint [not null, default: 0, note: 'Saldo tersimpan (>= 0), selalu diubah bersama ledger_entries']
+  created_at timestamptz [not null, default: `now()`]
+
+  Note: 'Akun buyer/seller/admin. Satu akun bisa menjadi buyer sekaligus seller.'
+}
+
+Table sellers {
+  user_id uuid [pk, ref: - users.id]
+  store_name text [not null, unique]
+  is_active boolean [not null, default: true, note: 'Admin dapat menonaktifkan seller']
+  created_at timestamptz [not null, default: `now()`]
+
+  Note: 'Profil toko seller (1:1 dengan users)'
+}
+
+Table products {
+  id uuid [pk, default: `gen_random_uuid()`]
+  sku text [not null, unique, note: 'mis. xld10']
+  name text [not null]
+  category text [not null, note: 'mis. Pulsa, Data, PLN']
+  brand text [not null, note: 'mis. XL, Telkomsel']
+  is_active boolean [not null, default: true]
+  created_at timestamptz [not null, default: `now()`]
+
+  Note: 'Katalog produk master, dikelola admin'
+}
+
+Table seller_products {
+  id uuid [pk, default: `gen_random_uuid()`]
+  seller_id uuid [not null, ref: > sellers.user_id]
+  product_id uuid [not null, ref: > products.id]
+  seller_sku text [not null, note: 'Kode produk di sistem seller']
+  price bigint [not null, note: 'Harga modal seller (> 0)']
+  is_active boolean [not null, default: true]
+  success_count int [not null, default: 0, note: 'Untuk routing']
+  failed_count int [not null, default: 0, note: 'Untuk routing']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    (seller_id, product_id) [unique]
+    (product_id, price) [name: 'seller_products_routing_idx', note: 'WHERE is_active']
+  }
+
+  Note: 'Penawaran seller untuk sebuah produk'
+}
+
+Table deposits {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [not null, ref: > users.id]
+  amount bigint [not null, note: '> 0']
+  status deposit_status [not null, default: 'pending']
+  note text
+  created_at timestamptz [not null, default: `now()`]
+  decided_at timestamptz
+
+  Indexes {
+    (user_id, created_at)
+  }
+}
+
+Table transactions {
+  id uuid [pk, default: `gen_random_uuid()`]
+  buyer_id uuid [not null, ref: > users.id]
+  ref_id text [not null, note: 'Dari sistem buyer; request ulang = cek status']
+  product_id uuid [not null, ref: > products.id]
+  customer_no text [not null, note: 'Nomor HP / ID pelanggan']
+  max_price bigint [note: 'Batas harga dari buyer (opsional)']
+  buyer_price bigint [not null, note: 'Nominal yang dipotong dari saldo buyer']
+  current_attempt_id uuid [ref: - transaction_attempts.id]
+  status trx_status [not null, default: 'pending']
+  sn text [note: 'SN / token dari seller']
+  message text
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    (buyer_id, ref_id) [unique]
+    (buyer_id, created_at)
+  }
+
+  Note: 'Transaksi dari sisi buyer'
+}
+
+Table transaction_attempts {
+  id uuid [pk, default: `gen_random_uuid()`, note: 'Dipakai sebagai ref_id ke seller']
+  transaction_id uuid [not null, ref: > transactions.id]
+  seller_id uuid [not null, ref: > sellers.user_id]
+  seller_product_id uuid [not null, ref: > seller_products.id]
+  seller_price bigint [not null, note: 'Harga seller saat attempt dibuat']
+  status trx_status [not null, default: 'pending']
+  sn text
+  message text
+  created_at timestamptz [not null, default: `now()`]
+  finished_at timestamptz
+
+  Indexes {
+    transaction_id
+    (seller_id, created_at)
+  }
+
+  Note: 'Setiap percobaan ke seller; gagal -> dialihkan ke seller berikutnya'
+}
+
+Table ledger_entries {
+  id bigserial [pk]
+  user_id uuid [not null, ref: > users.id]
+  type ledger_type [not null]
+  amount bigint [not null, note: 'Positif = masuk, negatif = keluar (tidak boleh 0)']
+  balance_after bigint [not null, note: 'Saldo setelah mutasi (>= 0)']
+  deposit_id uuid [ref: > deposits.id]
+  transaction_id uuid [ref: > transactions.id]
+  description text [not null]
+  created_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    (user_id, id)
+  }
+
+  Note: 'Mutasi saldo, append-only'
+}

@@ -2,6 +2,8 @@
 
 Status: **draft untuk didiskusikan**. Database: PostgreSQL.
 
+Diagram: tempel isi [`database.dbml`](database.dbml) ke https://dbdiagram.io/d.
+
 ## Prinsip
 
 1. **Uang = `BIGINT` rupiah**, tanpa float/desimal.
